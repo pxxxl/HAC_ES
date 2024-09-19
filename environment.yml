@@ -1,4 +1,4 @@
-name: HAC_env
+name: HACPP_env
 channels:
   - pytorch
   - pyg

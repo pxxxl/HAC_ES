@@ -50,6 +50,37 @@ class Entropy_gaussian(nn.Module):
         return bits
 
 
+# HACPP
+class Entropy_skipping_gaussian(nn.Module):
+    def __init__(self, Q=1):
+        super(Entropy_skipping_gaussian, self).__init__()
+        self.Q = Q
+    def forward(self, x, mean, scale, Q=None, x_mean=None, threshold=0):
+        if Q is None:
+            Q = self.Q
+
+        scale = torch.clamp(scale, min=1e-9)
+
+        mask = scale < threshold
+        x[mask] = mean[mask]
+
+        if use_clamp:
+            if x_mean is None:
+                x_mean = x.mean()
+            x_min = x_mean - 15_000 * Q
+            x_max = x_mean + 15_000 * Q
+            x = torch.clamp(x, min=x_min.detach(), max=x_max.detach())
+
+        m1 = torch.distributions.normal.Normal(mean, scale)
+        lower = m1.cdf(x - 0.5*Q)
+        upper = m1.cdf(x + 0.5*Q)
+        likelihood = torch.abs(upper - lower)
+        likelihood = Low_bound.apply(likelihood)
+        bits = -torch.log2(likelihood)
+        bits = bits * mask
+        return bits
+
+
 class Entropy_bernoulli(nn.Module):
     def __init__(self):
         super().__init__()

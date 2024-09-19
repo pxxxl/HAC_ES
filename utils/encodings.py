@@ -522,3 +522,98 @@ class GridEncoder(nn.Module):
         outputs = outputs.view(prefix_shape + [n_levels_calc * self.n_features])
 
         return outputs
+
+# HACPP
+def encoder_gaussian_skipping(x, mean, scale, Q, skipping_scale=1, file_name='tmp.b'):
+    assert file_name.endswith('.b')
+
+    # remove the scale that is smaller than skipping_scale, also remove the x
+    # and mean that at corresponding place
+    mask = scale < skipping_scale
+    x = x[~mask]
+    mean = mean[~mask]
+    scale = scale[~mask]
+    remove_num = mask.sum().item()
+
+    if not isinstance(Q, torch.Tensor):
+        Q = torch.tensor([Q], dtype=mean.dtype, device=mean.device).repeat(mean.shape[0])
+    else:
+        Q = Q[~mask]
+    assert x.shape == mean.shape == scale.shape == Q.shape
+
+    if x.shape[0] == 0:
+        open(file_name, 'wb').close()
+        return 0, torch.zeros(1, dtype=mean.dtype, device=mean.device), torch.zeros(1, dtype=mean.dtype, device=mean.device), remove_num
+
+    x_int_round = torch.round(x / Q)  # [100]
+    max_value = x_int_round.max()
+    min_value = x_int_round.min()
+    samples = torch.tensor(range(int(min_value.item()), int(max_value.item()) + 1 + 1)).to(
+        torch.float).to(x.device)  # from min_value to max_value+1. shape = [max_value+1+1 - min_value]
+    samples = samples.unsqueeze(0).repeat(mean.shape[0], 1)  # [100, max_value+1+1 - min_value]
+    mean = mean.unsqueeze(-1).repeat(1, samples.shape[-1])
+    scale = scale.unsqueeze(-1).repeat(1, samples.shape[-1])
+    GD = torch.distributions.normal.Normal(mean, scale)
+    lower = GD.cdf((samples - 0.5) * Q.unsqueeze(-1))
+    del samples
+    del mean
+    del scale
+    del GD
+    x_int_round_idx = (x_int_round - min_value).to(torch.int16)
+    assert (x_int_round_idx.to(torch.int32) == x_int_round - min_value).all()
+    # if x_int_round_idx.max() >= lower.shape[-1] - 1:  x_int_round_idx.max() exceed 65536 but to int6, that's why error
+        # assert False
+
+    if not use_multiprocessor:
+        byte_stream = torchac.encode_float_cdf(lower.cpu(), x_int_round_idx.cpu(), check_input_bounds=True)
+        with open(file_name, 'wb') as fout:
+            fout.write(byte_stream)
+        bit_len = len(byte_stream)*8
+    else:
+        bit_len = multiprocess_encoder(lower.cpu(), x_int_round_idx.cpu(), file_name)
+    torch.cuda.empty_cache()
+    return bit_len, min_value, max_value, remove_num
+
+#HACPP
+def decoder_gaussian_skipping(mean, scale, Q, skipping_scale=1, file_name='tmp.b', min_value=-100, max_value=100):
+    assert file_name.endswith('.b')
+
+    # generate the mask for the removed x, process the mean and scale
+    mask = scale < skipping_scale
+    raw_mean = mean.clone()
+    mean = mean[~mask]
+    scale = scale[~mask]
+    if not isinstance(Q, torch.Tensor):
+        Q = torch.tensor([Q], dtype=mean.dtype, device=mean.device).repeat(mean.shape[0])
+    else:
+        Q = Q[~mask]
+    assert mean.shape == scale.shape == Q.shape
+
+
+    samples = torch.tensor(range(int(min_value.item()), int(max_value.item()) + 1 + 1)).to(
+        torch.float).to(mean.device)  # from min_value to max_value+1. shape = [max_value+1+1 - min_value]
+    samples = samples.unsqueeze(0).repeat(mean.shape[0], 1)  # [100, max_value+1+1 - min_value]
+    mean = mean.unsqueeze(-1).repeat(1, samples.shape[-1])
+    scale = scale.unsqueeze(-1).repeat(1, samples.shape[-1])
+    GD = torch.distributions.normal.Normal(mean, scale)
+    lower = GD.cdf((samples - 0.5) * Q.unsqueeze(-1))
+    if not use_multiprocessor:
+        with open(file_name, 'rb') as fin:
+            byte_stream_d = fin.read()
+            if bool(byte_stream_d):
+                sym_out = torchac.decode_float_cdf(lower.cpu(), byte_stream_d).to(mean.device).to(torch.float32)
+            else:
+                sym_out = torch.zeros(0, dtype=mean.dtype, device=mean.device)
+        sym_out = torchac.decode_float_cdf(lower.cpu(), byte_stream_d).to(mean.device).to(torch.float32)
+    else:
+        raise NotImplementedError
+    x = sym_out + min_value
+    x = x * Q
+    torch.cuda.empty_cache()
+
+    # insert the corresponding raw mean value to the x
+    x_complete = torch.zeros(raw_mean.shape[0], dtype=x.dtype, device=x.device)
+    x_complete[~mask] = x
+    x_complete[mask] = raw_mean[mask]
+
+    return x_complete

@@ -3,7 +3,7 @@
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
 #
-# This software is free for non-commercial, research and evaluation use 
+# This software is free for non-commercial, research and evaluation use
 # under the terms of the LICENSE.md file.
 #
 # For inquiries contact  george.drettakis@inria.fr
@@ -88,10 +88,6 @@ def saveRuntimeCode(dst: str) -> None:
 
 def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, wandb=None, logger=None, ply_path=None):
     first_iter = 0
-
-    # HACPP setting opt.min_opacity
-    opt.min_opacity = 0.02
-
     tb_writer = prepare_output_and_logger(dataset)
 
     gaussians = GaussianModel(
@@ -623,12 +619,12 @@ if __name__ == "__main__":
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
-
     # change the model path
     if args.enable_entropy_skipping:
         args.model_path = args.model_path + f"_{args.feat_threshold}_{args.offset_threshold}_{args.scale_threshold}"
 
     # enable logging
+
     model_path = args.model_path
     os.makedirs(model_path, exist_ok=True)
 
@@ -673,16 +669,21 @@ if __name__ == "__main__":
     # network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
 
-    # training
-    x_bound_min, x_bound_max = training(args, lp.extract(args), op.extract(args), pp.extract(args), dataset,  args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, wandb, logger)
-    if args.warmup:
-        logger.info("\n Warmup finished! Reboot from last checkpoints")
-        new_ply_path = os.path.join(args.model_path, f'point_cloud/iteration_{args.iterations}', 'point_cloud.ply')
-        x_bound_min, x_bound_max = training(args, lp.extract(args), op.extract(args), pp.extract(args), dataset,  args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, wandb=wandb, logger=logger, ply_path=new_ply_path)
-
-    # save min and max using pickle
-    with open(os.path.join(args.model_path, "x_bound_min_max.pkl"), 'wb') as f:
-        pickle.dump([x_bound_min, x_bound_max], f)
+    # load min and max using pickle
+    with open(os.path.join(args.model_path, "x_bound_min_max.pkl"), 'rb') as fp:
+        x_bound = pickle.load(fp)
+        x_bound_min = x_bound[0]
+        x_bound_max = x_bound[1]
 
     # All done
     logger.info("\nTraining complete.")
+
+    # rendering
+    logger.info(f'\nStarting Rendering~')
+    visible_count = render_sets(args, lp.extract(args), -1, pp.extract(args), wandb=wandb, logger=logger, x_bound_min=x_bound_min, x_bound_max=x_bound_max)
+    logger.info("\nRendering complete.")
+
+    # calc metrics
+    logger.info("\n Starting evaluation...")
+    evaluate(args.model_path, visible_count=visible_count, wandb=wandb, logger=logger)
+    logger.info("\nEvaluating complete.")

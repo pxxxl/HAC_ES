@@ -47,6 +47,13 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
     Q_feat = 1
     Q_scaling = 0.001
     Q_offsets = 0.2
+
+    # HACPP
+    enable_entropy_skipping = pc.enable_entropy_skipping
+    feat_threshold = pc.feat_threshold
+    offset_threshold = pc.offset_threshold
+    scale_threshold = pc.scale_threshold
+
     if is_training:
         if step > 3000 and step <= 10000:
             # quantization
@@ -85,9 +92,14 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
             Q_scaling = Q_scaling[choose_idx]
             Q_offsets = Q_offsets[choose_idx]
             binary_grid_masks_chosen = binary_grid_masks[choose_idx].repeat(1, 1, 3).view(-1, 3*pc.n_offsets)
-            bit_feat = pc.entropy_gaussian.forward(feat_chosen, mean, scale, Q_feat, pc._anchor_feat.mean())
-            bit_scaling = pc.entropy_gaussian.forward(grid_scaling_chosen, mean_scaling, scale_scaling, Q_scaling, pc.get_scaling.mean())
-            bit_offsets = pc.entropy_gaussian.forward(grid_offsets_chosen, mean_offsets, scale_offsets, Q_offsets, pc._offset.mean())
+            if not enable_entropy_skipping:
+                bit_feat = pc.entropy_gaussian.forward(feat_chosen, mean, scale, Q_feat, pc._anchor_feat.mean())
+                bit_scaling = pc.entropy_gaussian.forward(grid_scaling_chosen, mean_scaling, scale_scaling, Q_scaling, pc.get_scaling.mean())
+                bit_offsets = pc.entropy_gaussian.forward(grid_offsets_chosen, mean_offsets, scale_offsets, Q_offsets, pc._offset.mean())
+            else:
+                bit_feat = pc.entropy_gaussian.forward(feat_chosen, mean, scale, Q_feat, pc._anchor_feat.mean(), threshold=feat_threshold)
+                bit_scaling = pc.entropy_gaussian.forward(grid_scaling_chosen, mean_scaling, scale_scaling, Q_scaling, pc.get_scaling.mean(), threshold=scale_threshold)
+                bit_offsets = pc.entropy_gaussian.forward(grid_offsets_chosen, mean_offsets, scale_offsets, Q_offsets, pc._offset.mean(), threshold=offset_threshold)
             bit_offsets = bit_offsets * binary_grid_masks_chosen
             bit_per_feat_param = torch.sum(bit_feat) / bit_feat.numel() * mask_anchor_rate
             bit_per_scaling_param = torch.sum(bit_scaling) / bit_scaling.numel() * mask_anchor_rate

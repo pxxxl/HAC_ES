@@ -24,7 +24,7 @@ from utils.general_utils import (build_scaling_rotation, get_expon_lr_func,
                                  inverse_sigmoid, strip_symmetric)
 from utils.graphics_utils import BasicPointCloud
 from utils.system_utils import mkdir_p
-from utils.entropy_models import Entropy_bernoulli, Entropy_gaussian, Entropy_factorized
+from utils.entropy_models import Entropy_bernoulli, Entropy_gaussian, Entropy_factorized, Entropy_skipping_gaussian
 
 from utils.encodings import \
     STE_binary, STE_multistep, Quantize_anchor, \
@@ -33,6 +33,7 @@ from utils.encodings import \
     encoder_anchor, decoder_anchor, \
     encoder, decoder, \
     encoder_gaussian, decoder_gaussian, \
+    encoder_gaussian_skipping, decoder_gaussian_skipping, \
     get_binary_vxl_size
 
 bit2MB_scale = 8 * 1024 * 1024
@@ -140,6 +141,11 @@ class GaussianModel(nn.Module):
                  Q=1,
                  use_2D: bool=True,
                  decoded_version: bool=False,
+                 # HACPP
+                 enable_entropy_skipping: bool=False,
+                 feat_threshold: float=0.5,
+                 offset_threshold: float=0.5,
+                 scale_threshold: float=0.5
                  ):
         super().__init__()
         print('hash_params:', use_2D, n_features_per_level,
@@ -168,6 +174,11 @@ class GaussianModel(nn.Module):
         self.Q = Q
         self.use_2D = use_2D
         self.decoded_version = decoded_version
+        # HACPP
+        self.enable_entropy_skipping = enable_entropy_skipping
+        self.feat_threshold = feat_threshold
+        self.offset_threshold = offset_threshold
+        self.scale_threshold = scale_threshold
 
         self._anchor = torch.empty(0)
         self._offset = torch.empty(0)
@@ -266,7 +277,11 @@ class GaussianModel(nn.Module):
         ).cuda()
         self.mlp_deform[-1].bias.data[0::2] += 10.0
 
-        self.entropy_gaussian = Entropy_gaussian(Q=1).cuda()
+        # HACPP
+        if self.enable_entropy_skipping:
+            self.entropy_gaussian = Entropy_skipping_gaussian(Q=1).cuda()
+        else:
+            self.entropy_gaussian = Entropy_gaussian(Q=1).cuda()
 
     def get_encoding_params(self):
         params = []
@@ -1153,7 +1168,13 @@ class GaussianModel(nn.Module):
             feat = _feat[N_start:N_end][indices].view(-1)  # [N_num*32]
             feat = STE_multistep.apply(feat, Q_feat, _feat.mean())
             torch.cuda.synchronize(); t0 = time.time()
-            bit_feat, min_feat, max_feat = encoder_gaussian(feat, mean, scale, Q_feat, file_name=feat_b_name)
+
+            # HACPP
+            if not self.enable_entropy_skipping:
+                bit_feat, min_feat, max_feat = encoder_gaussian(feat, mean, scale, Q_feat, file_name=feat_b_name)
+            else:
+                bit_feat, min_feat, max_feat, _ = encoder_gaussian_skipping(feat, mean, scale, Q_feat, skipping_scale=self.feat_threshold, file_name=feat_b_name)
+
             torch.cuda.synchronize(); t_codec += time.time() - t0
             bit_feat_list.append(bit_feat)
             min_feat_list.append(min_feat)
@@ -1163,7 +1184,13 @@ class GaussianModel(nn.Module):
             scaling = _scaling[N_start:N_end][indices].view(-1)  # [N_num*6]
             scaling = STE_multistep.apply(scaling, Q_scaling, _scaling.mean())
             torch.cuda.synchronize(); t0 = time.time()
-            bit_scaling, min_scaling, max_scaling = encoder_gaussian(scaling, mean_scaling, scale_scaling, Q_scaling, file_name=scaling_b_name)
+
+            # HACPP
+            if not self.enable_entropy_skipping:
+                bit_scaling, min_scaling, max_scaling = encoder_gaussian(scaling, mean_scaling, scale_scaling, Q_scaling, file_name=scaling_b_name)
+            else:
+                bit_scaling, min_scaling, max_scaling, _ = encoder_gaussian_skipping(scaling, mean_scaling, scale_scaling, Q_scaling, skipping_scale=self.scaling_threshold, file_name=scaling_b_name)
+
             torch.cuda.synchronize(); t_codec += time.time() - t0
             bit_scaling_list.append(bit_scaling)
             min_scaling_list.append(min_scaling)
@@ -1176,7 +1203,13 @@ class GaussianModel(nn.Module):
             offsets = STE_multistep.apply(offsets, Q_offsets, _grid_offsets.mean())
             offsets[~mask] = 0.0
             torch.cuda.synchronize(); t0 = time.time()
-            bit_offsets, min_offsets, max_offsets = encoder_gaussian(offsets[mask], mean_offsets[mask], scale_offsets[mask], Q_offsets[mask], file_name=offsets_b_name)
+
+            # HACPP
+            if not self.enable_entropy_skipping:
+                bit_offsets, min_offsets, max_offsets = encoder_gaussian(offsets[mask], mean_offsets[mask], scale_offsets[mask], Q_offsets[mask], file_name=offsets_b_name)
+            else:
+                bit_offsets, min_offsets, max_offsets, _ = encoder_gaussian_skipping(offsets[mask], mean_offsets[mask], scale_offsets[mask], Q_offsets[mask], skipping_scale=self.offset_threshold, file_name=offsets_b_name)
+
             torch.cuda.synchronize(); t_codec += time.time() - t0
             bit_offsets_list.append(bit_offsets)
             min_offsets_list.append(min_offsets)
@@ -1299,16 +1332,32 @@ class GaussianModel(nn.Module):
             Q_scaling = Q_scaling * (1 + torch.tanh(Q_scaling_adj))
             Q_offsets = Q_offsets * (1 + torch.tanh(Q_offsets_adj))
 
-            feat_decoded = decoder_gaussian(mean, scale, Q_feat, file_name=feat_b_name, min_value=min_feat, max_value=max_feat)
+            # HACPP
+            if not self.enable_entropy_skipping:
+                feat_decoded = decoder_gaussian(mean, scale, Q_feat, file_name=feat_b_name, min_value=min_feat, max_value=max_feat)
+            else:
+                feat_decoded = decoder_gaussian_skipping(mean, scale, Q_feat, skipping_scale=self.feat_threshold ,file_name=feat_b_name, min_value=min_feat, max_value=max_feat)
+
             feat_decoded = feat_decoded.view(N_num, self.feat_dim)  # [N_num, 32]
             feat_decoded_list.append(feat_decoded)
 
-            scaling_decoded = decoder_gaussian(mean_scaling, scale_scaling, Q_scaling, file_name=scaling_b_name, min_value=min_scaling, max_value=max_scaling)
+            # HACPP
+            if not self.enable_entropy_skipping:
+                scaling_decoded = decoder_gaussian(mean_scaling, scale_scaling, Q_scaling, file_name=scaling_b_name, min_value=min_scaling, max_value=max_scaling)
+            else:
+                scaling_decoded = decoder_gaussian_skipping(mean_scaling, scale_scaling, Q_scaling, skipping_scale=self.scaling_threshold, file_name=scaling_b_name, min_value=min_scaling, max_value=max_scaling)
+
             scaling_decoded = scaling_decoded.view(N_num, 6)  # [N_num, 6]
             scaling_decoded_list.append(scaling_decoded)
 
             masks_tmp = masks_decoded[N_start:N_end].repeat(1, 1, 3).view(-1, 3 * self.n_offsets).view(-1).to(torch.bool)
-            offsets_decoded_tmp = decoder_gaussian(mean_offsets[masks_tmp], scale_offsets[masks_tmp], Q_offsets[masks_tmp], file_name=offsets_b_name, min_value=min_offsets, max_value=max_offsets)
+
+            # HACPP
+            if not self.enable_entropy_skipping:
+                offsets_decoded_tmp = decoder_gaussian(mean_offsets[masks_tmp], scale_offsets[masks_tmp], Q_offsets[masks_tmp], file_name=offsets_b_name, min_value=min_offsets, max_value=max_offsets)
+            else:
+                offsets_decoded_tmp = decoder_gaussian_skipping(mean_offsets[masks_tmp], scale_offsets[masks_tmp], Q_offsets[masks_tmp], skipping_scale=self.offset_threshold, file_name=offsets_b_name, min_value=min_offsets, max_value=max_offsets)
+                
             offsets_decoded = torch.zeros_like(mean_offsets)
             offsets_decoded[masks_tmp] = offsets_decoded_tmp
             offsets_decoded = offsets_decoded.view(N_num, -1).view(N_num, self.n_offsets, 3)  # [N_num, K, 3]
