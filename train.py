@@ -89,9 +89,6 @@ def saveRuntimeCode(dst: str) -> None:
 def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, wandb=None, logger=None, ply_path=None):
     first_iter = 0
 
-    # HACPP setting opt.min_opacity
-    opt.min_opacity = 0.02
-
     tb_writer = prepare_output_and_logger(dataset)
 
     gaussians = GaussianModel(
@@ -227,7 +224,7 @@ def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, s
 
             # Log and save
             torch.cuda.synchronize(); t_start_log = time.time()
-            training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), wandb, logger, args_param.model_path)
+            # training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), wandb, logger, args_param.model_path)
             if (iteration in saving_iterations):
                 logger.info("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -590,7 +587,7 @@ def get_logger(path):
 
     return logger
 
-if __name__ == "__main__":
+def main():
     # Set up command line argument parser
     parser = ArgumentParser(description="Training script parameters")
     lp = ModelParams(parser)
@@ -686,3 +683,7 @@ if __name__ == "__main__":
 
     # All done
     logger.info("\nTraining complete.")
+
+
+if __name__ == "__main__":
+    main()

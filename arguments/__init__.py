@@ -146,7 +146,7 @@ class OptimizationParams(ParamGroup):
         
         self.min_opacity = 0.005  # 0.2
         self.success_threshold = 0.8
-        self.densify_grad_threshold = 0.0002
+        self.densify_grad_threshold = 0.02 # original 0.0002
 
         super().__init__(parser, "Optimization Parameters")
 

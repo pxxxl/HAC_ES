@@ -586,7 +586,7 @@ def get_logger(path):
 
     return logger
 
-if __name__ == "__main__":
+def main():
     # Set up command line argument parser
     parser = ArgumentParser(description="Training script parameters")
     lp = ModelParams(parser)
@@ -687,3 +687,6 @@ if __name__ == "__main__":
     logger.info("\n Starting evaluation...")
     evaluate(args.model_path, visible_count=visible_count, wandb=wandb, logger=logger)
     logger.info("\nEvaluating complete.")
+
+if __name__ == "__main__":
+    main()

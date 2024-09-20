@@ -24,12 +24,12 @@ sys.argv = [
     '--voxel_size', '0',
     '--update_init_factor', '128',
     '--iterations', '30000',
-    '-m', f'outputs/bungeenerf/{scene}/{lmbda}',
+    '-m', f'outputs/bungeenerf_0.02_thred/{scene}/{lmbda}',
     '--lmbda', f'{lmbda}',
     '--enable_entropy_skipping',
     '--feat_threshold', '0.1',
     '--offset_threshold', '0',
     '--scale_threshold', '0'
 ]
-
+train.main()
 eval.main()

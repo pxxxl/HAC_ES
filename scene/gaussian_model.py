@@ -1189,7 +1189,7 @@ class GaussianModel(nn.Module):
             if not self.enable_entropy_skipping:
                 bit_scaling, min_scaling, max_scaling = encoder_gaussian(scaling, mean_scaling, scale_scaling, Q_scaling, file_name=scaling_b_name)
             else:
-                bit_scaling, min_scaling, max_scaling, _ = encoder_gaussian_skipping(scaling, mean_scaling, scale_scaling, Q_scaling, skipping_scale=self.scaling_threshold, file_name=scaling_b_name)
+                bit_scaling, min_scaling, max_scaling, _ = encoder_gaussian_skipping(scaling, mean_scaling, scale_scaling, Q_scaling, skipping_scale=self.scale_threshold, file_name=scaling_b_name)
 
             torch.cuda.synchronize(); t_codec += time.time() - t0
             bit_scaling_list.append(bit_scaling)
