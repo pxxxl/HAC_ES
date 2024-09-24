@@ -15,6 +15,9 @@ import runpy
 import train
 import eval
 import sys
+import os
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 sys.argv = [
     'train.py',  # script name
@@ -31,5 +34,5 @@ sys.argv = [
     '--offset_threshold', '0',
     '--scale_threshold', '0'
 ]
-train.main()
+# train.main()
 eval.main()

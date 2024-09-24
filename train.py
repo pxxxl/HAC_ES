@@ -50,6 +50,7 @@ from utils.encodings import anchor_round_digits, Q_anchor, encoder_anchor, get_b
 
 from lpipsPyTorch import lpips
 import pickle
+from utils.log_utils import setup_hacpp_logger, h_log
 
 bit2MB_scale = 8 * 1024 * 1024
 run_codec = True
@@ -86,7 +87,7 @@ def saveRuntimeCode(dst: str) -> None:
     print('Backup Finished!')
 
 
-def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, wandb=None, logger=None, ply_path=None):
+def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, wandb=None, logger=None, ply_path=None, h_logger=None):
     first_iter = 0
 
     tb_writer = prepare_output_and_logger(dataset)
@@ -110,6 +111,11 @@ def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, s
     )
     scene = Scene(dataset, gaussians, ply_path=ply_path)
     gaussians.update_anchor_bound()
+
+    h_log(f"enable_entropy_skipping: {args_param.enable_entropy_skipping}")
+    h_log(f"feat_threshold: {args_param.feat_threshold}")
+    h_log(f"offset_threshold: {args_param.offset_threshold}")
+    h_log(f"scale_threshold: {args_param.scale_threshold}")
 
     gaussians.training_setup(opt)
     if checkpoint:
@@ -224,7 +230,7 @@ def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, s
 
             # Log and save
             torch.cuda.synchronize(); t_start_log = time.time()
-            # training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), wandb, logger, args_param.model_path)
+            training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), wandb, logger, args_param.model_path)
             if (iteration in saving_iterations):
                 logger.info("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -587,6 +593,7 @@ def get_logger(path):
 
     return logger
 
+
 def main():
     # Set up command line argument parser
     parser = ArgumentParser(description="Training script parameters")
@@ -620,16 +627,12 @@ def main():
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
-
-    # change the model path
-    if args.enable_entropy_skipping:
-        args.model_path = args.model_path + f"_{args.feat_threshold}_{args.offset_threshold}_{args.scale_threshold}"
-
     # enable logging
     model_path = args.model_path
     os.makedirs(model_path, exist_ok=True)
 
     logger = get_logger(model_path)
+    h_logger = setup_hacpp_logger(model_path)
 
 
     logger.info(f'args: {args}')
@@ -671,11 +674,11 @@ def main():
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
 
     # training
-    x_bound_min, x_bound_max = training(args, lp.extract(args), op.extract(args), pp.extract(args), dataset,  args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, wandb, logger)
+    x_bound_min, x_bound_max = training(args, lp.extract(args), op.extract(args), pp.extract(args), dataset,  args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, wandb, logger, h_logger=h_logger)
     if args.warmup:
         logger.info("\n Warmup finished! Reboot from last checkpoints")
         new_ply_path = os.path.join(args.model_path, f'point_cloud/iteration_{args.iterations}', 'point_cloud.ply')
-        x_bound_min, x_bound_max = training(args, lp.extract(args), op.extract(args), pp.extract(args), dataset,  args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, wandb=wandb, logger=logger, ply_path=new_ply_path)
+        x_bound_min, x_bound_max = training(args, lp.extract(args), op.extract(args), pp.extract(args), dataset,  args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, wandb=wandb, logger=logger, ply_path=new_ply_path, h_logger=h_logger)
 
     # save min and max using pickle
     with open(os.path.join(args.model_path, "x_bound_min_max.pkl"), 'wb') as f:

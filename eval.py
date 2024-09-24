@@ -50,6 +50,7 @@ from utils.encodings import anchor_round_digits, Q_anchor, encoder_anchor, get_b
 
 from lpipsPyTorch import lpips
 import pickle
+from utils.log_utils import setup_hacpp_logger, h_log
 
 bit2MB_scale = 8 * 1024 * 1024
 run_codec = True
@@ -84,183 +85,7 @@ def saveRuntimeCode(dst: str) -> None:
     shutil.copytree(log_dir, dst, ignore=shutil.ignore_patterns(*ignorePatterns))
 
     print('Backup Finished!')
-
-
-def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, wandb=None, logger=None, ply_path=None):
-    first_iter = 0
-    tb_writer = prepare_output_and_logger(dataset)
-
-    gaussians = GaussianModel(
-        dataset.feat_dim,
-        dataset.n_offsets,
-        dataset.voxel_size,
-        dataset.update_depth,
-        dataset.update_init_factor,
-        dataset.update_hierachy_factor,
-        dataset.use_feat_bank,
-        n_features_per_level=args_param.n_features,
-        log2_hashmap_size=args_param.log2,
-        log2_hashmap_size_2D=args_param.log2_2D,
-        # HACPP
-        enable_entropy_skipping=args_param.enable_entropy_skipping,
-        feat_threshold=args_param.feat_threshold,
-        offset_threshold=args_param.offset_threshold,
-        scale_threshold=args_param.scale_threshold,
-    )
-    scene = Scene(dataset, gaussians, ply_path=ply_path)
-    gaussians.update_anchor_bound()
-
-    gaussians.training_setup(opt)
-    if checkpoint:
-        (model_params, first_iter) = torch.load(checkpoint)
-        gaussians.restore(model_params, opt)
-
-    iter_start = torch.cuda.Event(enable_timing = True)
-    iter_end = torch.cuda.Event(enable_timing = True)
-
-    viewpoint_stack = None
-    ema_loss_for_log = 0.0
-    progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
-    first_iter += 1
-    torch.cuda.synchronize(); t_start = time.time()
-    log_time_sub = 0
-    for iteration in range(first_iter, opt.iterations + 1):
-        # network gui not available in scaffold-gs yet
-        if network_gui.conn == None:
-            network_gui.try_connect()
-        while network_gui.conn != None:
-            try:
-                net_image_bytes = None
-                custom_cam, do_training, pipe.convert_SHs_python, pipe.compute_cov3D_python, keep_alive, scaling_modifer = network_gui.receive()
-                if custom_cam != None:
-                    net_image = render(custom_cam, gaussians, pipe, background, scaling_modifer)["render"]
-                    net_image_bytes = memoryview((torch.clamp(net_image, min=0, max=1.0) * 255).byte().permute(1, 2, 0).contiguous().cpu().numpy())
-                network_gui.send(net_image_bytes, dataset.source_path)
-                if do_training and ((iteration < int(opt.iterations)) or not keep_alive):
-                    break
-            except Exception as e:
-                network_gui.conn = None
-
-        iter_start.record()
-
-        gaussians.update_learning_rate(iteration)
-
-        bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
-        background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
-
-        # Pick a random Camera
-        if not viewpoint_stack:
-            viewpoint_stack = scene.getTrainCameras().copy()
-        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
-
-        # Render
-        if (iteration - 1) == debug_from:
-            pipe.debug = True
-
-        voxel_visible_mask = prefilter_voxel(viewpoint_cam, gaussians, pipe, background)
-        # voxel_visible_mask:bool = radii_pure > 0: 应该是[N_anchor]?
-        retain_grad = (iteration < opt.update_until and iteration >= 0)
-        render_pkg = render(viewpoint_cam, gaussians, pipe, background, visible_mask=voxel_visible_mask, retain_grad=retain_grad, step=iteration)
-        image, viewspace_point_tensor, visibility_filter, offset_selection_mask, radii, scaling, opacity = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["selection_mask"], render_pkg["radii"], render_pkg["scaling"], render_pkg["neural_opacity"]
-        # image: [3, H, W]. inited as: torch::full({NUM_CHANNELS, H, W}, 0.0, float_opts);
-        # viewspace_point_tensor=screenspace_points: [N_opacity_pos_gaussian, 3]
-        # visibility_filter: radii > 0. 其中 radii inited as: torch::full({P}, 0, means3D.options().dtype(torch::kInt32)); 其中P=N_opacity_pos_gaussian
-        # offset_selection_mask: [N_visible_anchor*k]。 用来表示visible anchor中哪几个gaussian是有效的，根据opacity>0.0得到
-        # radii: [N_opacity_pos_gaussian]. inited as: torch::full({P}, 0, means3D.options().dtype(torch::kInt32)); 其中P=N_opacity_pos_gaussian
-        # scaling: [N_opacity_pos_gaussian, 3]
-        # opacity: [N_visible_anchor*K, 1]
-
-        bit_per_param = render_pkg["bit_per_param"]
-        bit_per_feat_param = render_pkg["bit_per_feat_param"]
-        bit_per_scaling_param = render_pkg["bit_per_scaling_param"]
-        bit_per_offsets_param = render_pkg["bit_per_offsets_param"]
-
-        if iteration % 2000 == 0 and bit_per_param is not None:
-
-            ttl_size_feat_MB = bit_per_feat_param.item() * gaussians.get_anchor.shape[0] * gaussians.feat_dim / bit2MB_scale
-            ttl_size_scaling_MB = bit_per_scaling_param.item() * gaussians.get_anchor.shape[0] * 6 / bit2MB_scale
-            ttl_size_offsets_MB = bit_per_offsets_param.item() * gaussians.get_anchor.shape[0] * 3 * gaussians.n_offsets / bit2MB_scale
-            ttl_size_MB = ttl_size_feat_MB + ttl_size_scaling_MB + ttl_size_offsets_MB
-
-            logger.info("\n----------------------------------------------------------------------------------------")
-            logger.info("\n-----[ITER {}] bits info: bit_per_feat_param={}, anchor_num={}, ttl_size_feat_MB={}-----".format(iteration, bit_per_feat_param.item(), gaussians.get_anchor.shape[0], ttl_size_feat_MB))
-            logger.info("\n-----[ITER {}] bits info: bit_per_scaling_param={}, anchor_num={}, ttl_size_scaling_MB={}-----".format(iteration, bit_per_scaling_param.item(), gaussians.get_anchor.shape[0], ttl_size_scaling_MB))
-            logger.info("\n-----[ITER {}] bits info: bit_per_offsets_param={}, anchor_num={}, ttl_size_offsets_MB={}-----".format(iteration, bit_per_offsets_param.item(), gaussians.get_anchor.shape[0], ttl_size_offsets_MB))
-            logger.info("\n-----[ITER {}] bits info: bit_per_param={}, anchor_num={}, ttl_size_MB={}-----".format(iteration, bit_per_param.item(), gaussians.get_anchor.shape[0], ttl_size_MB))
-            with torch.no_grad():
-                grid_masks = gaussians._mask.data
-                binary_grid_masks = (torch.sigmoid(grid_masks) > 0.01).float()
-                mask_1_rate, mask_size_bit, mask_size_MB, mask_numel = get_binary_vxl_size(binary_grid_masks + 0.0)  # [0, 1] -> [-1, 1]
-            logger.info("\n-----[ITER {}] bits info: 1_rate_mask={}, mask_numel={}, mask_size_MB={}-----".format(iteration, mask_1_rate, mask_numel, mask_size_MB))
-
-        gt_image = viewpoint_cam.original_image.cuda()
-        Ll1 = l1_loss(image, gt_image)
-
-        ssim_loss = (1.0 - ssim(image, gt_image))
-        scaling_reg = scaling.prod(dim=1).mean()
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * ssim_loss + 0.01*scaling_reg
-
-        if bit_per_param is not None:
-            _, bit_hash_grid, MB_hash_grid, _ = get_binary_vxl_size((gaussians.get_encoding_params()+1)/2)
-            denom = gaussians._anchor.shape[0]*(gaussians.feat_dim+6+3*gaussians.n_offsets)
-            loss = loss + args_param.lmbda * (bit_per_param + bit_hash_grid / denom)
-
-            loss = loss + 5e-4 * torch.mean(torch.sigmoid(gaussians._mask))
-
-        loss.backward()
-
-        iter_end.record()
-
-        with torch.no_grad():
-            # Progress bar
-            ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
-
-            if iteration % 10 == 0:
-                progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}"})
-                progress_bar.update(10)
-            if iteration == opt.iterations:
-                progress_bar.close()
-
-            # Log and save
-            torch.cuda.synchronize(); t_start_log = time.time()
-            training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), wandb, logger, args_param.model_path)
-            if (iteration in saving_iterations):
-                logger.info("\n[ITER {}] Saving Gaussians".format(iteration))
-                scene.save(iteration)
-            torch.cuda.synchronize(); t_end_log = time.time()
-            t_log = t_end_log - t_start_log
-            log_time_sub += t_log
-
-            # densification
-            if iteration < opt.update_until and iteration > opt.start_stat:
-                # add statis
-                # viewspace_point_tensor=screenspace_points: [N_opacity_pos_gaussian, 3]
-                # opacity: [N_visible_anchor*K, 1]
-                # visibility_filter: radii > 0. 其中 radii inited as: torch::full({P}, 0, means3D.options().dtype(torch::kInt32)); 其中P=N_opacity_pos_gaussian
-                # offset_selection_mask: [N_visible_anchor*k]。 用来表示visible anchor中哪几个gaussian是有效的，根据opacity>0.0得到
-                # voxel_visible_mask:bool = radii_pure > 0: 应该是[N_anchor]? voxel_visible_mask.sum()=N_visible_anchor
-                gaussians.training_statis(viewspace_point_tensor, opacity, visibility_filter, offset_selection_mask, voxel_visible_mask)
-                if iteration not in range(3000, 4000):  # let the model get fit to quantization
-                    # densification
-                    if iteration > opt.update_from and iteration % opt.update_interval == 0:
-                        gaussians.adjust_anchor(check_interval=opt.update_interval, success_threshold=opt.success_threshold, grad_threshold=opt.densify_grad_threshold, min_opacity=opt.min_opacity)
-            elif iteration == opt.update_until:
-                del gaussians.opacity_accum
-                del gaussians.offset_gradient_accum
-                del gaussians.offset_denom
-                torch.cuda.empty_cache()
-
-            if iteration < opt.iterations:
-                gaussians.optimizer.step()
-                gaussians.optimizer.zero_grad(set_to_none = True)
-            if (iteration in checkpoint_iterations):
-                logger.info("\n[ITER {}] Saving Checkpoint".format(iteration))
-                torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
-
-    torch.cuda.synchronize(); t_end = time.time()
-    logger.info("\n Total Training time: {}".format(t_end-t_start-log_time_sub))
-
-    return gaussians.x_bound_min, gaussians.x_bound_max
+    
 
 def prepare_output_and_logger(args):
     if not args.model_path:
@@ -619,17 +444,13 @@ def main():
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
-    # change the model path
-    if args.enable_entropy_skipping:
-        args.model_path = args.model_path + f"_{args.feat_threshold}_{args.offset_threshold}_{args.scale_threshold}"
-
     # enable logging
 
     model_path = args.model_path
     os.makedirs(model_path, exist_ok=True)
 
     logger = get_logger(model_path)
-
+    h_logger = setup_hacpp_logger(model_path)
 
     logger.info(f'args: {args}')
 

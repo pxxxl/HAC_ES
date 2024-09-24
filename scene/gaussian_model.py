@@ -36,6 +36,8 @@ from utils.encodings import \
     encoder_gaussian_skipping, decoder_gaussian_skipping, \
     get_binary_vxl_size
 
+from utils.log_utils import setup_hacpp_logger, h_log
+
 bit2MB_scale = 8 * 1024 * 1024
 
 class mix_3D2D_encoding(nn.Module):
@@ -279,8 +281,10 @@ class GaussianModel(nn.Module):
 
         # HACPP
         if self.enable_entropy_skipping:
+            h_log('Setting Gaussian: Entropy skipping enabled')
             self.entropy_gaussian = Entropy_skipping_gaussian(Q=1).cuda()
         else:
+            h_log('Setting Gaussian: Entropy skipping disabled')
             self.entropy_gaussian = Entropy_gaussian(Q=1).cuda()
 
     def get_encoding_params(self):

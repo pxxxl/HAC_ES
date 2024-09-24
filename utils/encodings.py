@@ -530,20 +530,13 @@ def encoder_gaussian_skipping(x, mean, scale, Q, skipping_scale=1, file_name='tm
     # remove the scale that is smaller than skipping_scale, also remove the x
     # and mean that at corresponding place
     mask = scale < skipping_scale
-    x = x[~mask]
-    mean = mean[~mask]
-    scale = scale[~mask]
+    x[mask] = mean[mask]
     remove_num = mask.sum().item()
 
     if not isinstance(Q, torch.Tensor):
         Q = torch.tensor([Q], dtype=mean.dtype, device=mean.device).repeat(mean.shape[0])
-    else:
-        Q = Q[~mask]
-    assert x.shape == mean.shape == scale.shape == Q.shape
 
-    if x.shape[0] == 0:
-        open(file_name, 'wb').close()
-        return 0, torch.zeros(1, dtype=mean.dtype, device=mean.device), torch.zeros(1, dtype=mean.dtype, device=mean.device), remove_num
+    assert x.shape == mean.shape == scale.shape == Q.shape
 
     x_int_round = torch.round(x / Q)  # [100]
     max_value = x_int_round.max()
@@ -579,16 +572,9 @@ def decoder_gaussian_skipping(mean, scale, Q, skipping_scale=1, file_name='tmp.b
     assert file_name.endswith('.b')
 
     # generate the mask for the removed x, process the mean and scale
-    mask = scale < skipping_scale
-    raw_mean = mean.clone()
-    mean = mean[~mask]
-    scale = scale[~mask]
     if not isinstance(Q, torch.Tensor):
         Q = torch.tensor([Q], dtype=mean.dtype, device=mean.device).repeat(mean.shape[0])
-    else:
-        Q = Q[~mask]
     assert mean.shape == scale.shape == Q.shape
-
 
     samples = torch.tensor(range(int(min_value.item()), int(max_value.item()) + 1 + 1)).to(
         torch.float).to(mean.device)  # from min_value to max_value+1. shape = [max_value+1+1 - min_value]
@@ -611,9 +597,4 @@ def decoder_gaussian_skipping(mean, scale, Q, skipping_scale=1, file_name='tmp.b
     x = x * Q
     torch.cuda.empty_cache()
 
-    # insert the corresponding raw mean value to the x
-    x_complete = torch.zeros(raw_mean.shape[0], dtype=x.dtype, device=x.device)
-    x_complete[~mask] = x
-    x_complete[mask] = raw_mean[mask]
-
-    return x_complete
+    return x

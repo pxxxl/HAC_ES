@@ -77,7 +77,6 @@ class Entropy_skipping_gaussian(nn.Module):
         likelihood = torch.abs(upper - lower)
         likelihood = Low_bound.apply(likelihood)
         bits = -torch.log2(likelihood)
-        bits = bits * mask
         return bits
 
 
