@@ -1349,7 +1349,7 @@ class GaussianModel(nn.Module):
             if not self.enable_entropy_skipping:
                 scaling_decoded = decoder_gaussian(mean_scaling, scale_scaling, Q_scaling, file_name=scaling_b_name, min_value=min_scaling, max_value=max_scaling)
             else:
-                scaling_decoded = decoder_gaussian_skipping(mean_scaling, scale_scaling, Q_scaling, skipping_scale=self.scaling_threshold, file_name=scaling_b_name, min_value=min_scaling, max_value=max_scaling)
+                scaling_decoded = decoder_gaussian_skipping(mean_scaling, scale_scaling, Q_scaling, skipping_scale=self.scale_threshold, file_name=scaling_b_name, min_value=min_scaling, max_value=max_scaling)
 
             scaling_decoded = scaling_decoded.view(N_num, 6)  # [N_num, 6]
             scaling_decoded_list.append(scaling_decoded)

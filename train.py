@@ -230,7 +230,7 @@ def training(args_param, dataset, opt, pipe, dataset_name, testing_iterations, s
 
             # Log and save
             torch.cuda.synchronize(); t_start_log = time.time()
-            training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), wandb, logger, args_param.model_path)
+            training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background), wandb, logger, args_param.model_path, h_logger=h_logger)
             if (iteration in saving_iterations):
                 logger.info("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
@@ -292,7 +292,7 @@ def prepare_output_and_logger(args):
     return tb_writer
 
 
-def training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, wandb=None, logger=None, pre_path_name=''):
+def training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, elapsed, testing_iterations, scene : Scene, renderFunc, renderArgs, wandb=None, logger=None, pre_path_name='', h_logger=None):
     if tb_writer:
         tb_writer.add_scalar(f'{dataset_name}/train_loss_patches/l1_loss', Ll1.item(), iteration)
         tb_writer.add_scalar(f'{dataset_name}/train_loss_patches/total_loss', loss.item(), iteration)
@@ -316,9 +316,11 @@ def training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, elap
                         # conduct encoding
                         patched_infos, log_info = scene.gaussians.conduct_encoding(pre_path_name=bit_stream_path)
                         logger.info(log_info)
+                        h_log(log_info)
                         # conduct decoding
                         log_info = scene.gaussians.conduct_decoding(pre_path_name=bit_stream_path, patched_infos=patched_infos)
                         logger.info(log_info)
+                        h_log(log_info)
             torch.cuda.empty_cache()
             validation_configs = ({'name': 'test', 'cameras' : scene.getTestCameras()},
                                   {'name': 'train', 'cameras' : [scene.getTrainCameras()[idx % len(scene.getTrainCameras())] for idx in range(5, 30, 5)]})
