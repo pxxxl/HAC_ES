@@ -20,8 +20,19 @@ run_config_list_template = {
     'lmbda': 0.0005,
 }
 
+run_config_list = []
+for feat_threshold in feat_threshold_list:
+    for lmbda in lmbda_list:
+        run_config = run_config_list_template.copy()
+        run_config['feat_threshold'] = feat_threshold
+        run_config['lmbda'] = lmbda
+        run_config['enable_entropy_skipping'] = True
+        run_config_list.append(run_config)
 
-
+for lmbda in lmbda_list:
+    run_config = run_config_list_template.copy()
+    run_config['lmbda'] = lmbda
+    run_config_list.append(run_config)
 
 def run(idx, config, script_name):
     run_cfg = config[idx]
@@ -41,10 +52,10 @@ def run(idx, config, script_name):
     os.system(cmd)
 
 if __name__ == '__main__':
-    for i in range(len(run_config_list_tnt)):
-        run(i, run_config_list_tnt, 'train.py')
-        run(i, run_config_list_tnt, 'eval.py')
-        print(f"Finished {i+1}/{len(run_config_list_tnt)}")
+    for i in range(len(run_config_list)):
+        run(i, run_config_list, 'train.py')
+        run(i, run_config_list, 'eval.py')
+        print(f"Finished {i+1}/{len(run_config_list)}")
 
 #0 
 #1
