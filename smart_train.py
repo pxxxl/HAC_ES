@@ -6,8 +6,8 @@ import os
 
 cuda = "0"
 
-feat_threshold_list = [0.1, 0.2, 0.5, 1.0]
-lmbda_list = [0.0005, 0.001, 0.002, 0.004]
+feat_threshold_list = [0.03, 0.07]
+lmbda_list = [0.0007, 0.0013, 0.0017, 0.003]
 
 run_config_list_template = {
     'database': 'bungeenerf',
@@ -16,7 +16,7 @@ run_config_list_template = {
     'feat_threshold': 0.1,
     'offset_threshold': 0,
     'scale_threshold': 0,
-    'densify_grad_threshold': 0.02,
+    'densify_grad_threshold': 0.0002,
     'lmbda': 0.0005,
 }
 
