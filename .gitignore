@@ -166,7 +166,9 @@ submodules/
 data/
 runs/
 outputs/
+collect_output/
 *.out
 line_x_s.json
 line_y_s.json
 smart_record.json
+*.zip
