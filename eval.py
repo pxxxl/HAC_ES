@@ -51,6 +51,7 @@ from utils.encodings import anchor_round_digits, Q_anchor, encoder_anchor, get_b
 from lpipsPyTorch import lpips
 import pickle
 from utils.log_utils import setup_hacpp_logger, h_log
+import shutil
 
 bit2MB_scale = 8 * 1024 * 1024
 run_codec = True

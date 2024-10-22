@@ -7,7 +7,8 @@ import os
 cuda = "0"
 
 feat_threshold_list = [0.03, 0.07]
-lmbda_list = [0.0007, 0.0013, 0.0017, 0.003]
+lmbda_list = [0.0005, 0.0007, 0.001, 0.0015, 0.002, 0.003, 0.004]
+scene_list = ['barcelona', 'bilbao']
 
 run_config_list_template = {
     'database': 'bungeenerf',
@@ -21,18 +22,21 @@ run_config_list_template = {
 }
 
 run_config_list = []
-for feat_threshold in feat_threshold_list:
+for scene in scene_list:
+    for feat_threshold in feat_threshold_list:
+        for lmbda in lmbda_list:
+            run_config = run_config_list_template.copy()
+            run_config['feat_threshold'] = feat_threshold
+            run_config['lmbda'] = lmbda
+            run_config['enable_entropy_skipping'] = True
+            run_config['scene'] = scene
+            run_config_list.append(run_config)
+
     for lmbda in lmbda_list:
         run_config = run_config_list_template.copy()
-        run_config['feat_threshold'] = feat_threshold
         run_config['lmbda'] = lmbda
-        run_config['enable_entropy_skipping'] = True
+        run_config['scene'] = scene
         run_config_list.append(run_config)
-
-for lmbda in lmbda_list:
-    run_config = run_config_list_template.copy()
-    run_config['lmbda'] = lmbda
-    run_config_list.append(run_config)
 
 def run(idx, config, script_name):
     run_cfg = config[idx]
